@@ -1,368 +1,375 @@
-import React, { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
-import { systemDataAPI, dataUtils } from '../utils/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  AreaChart, Area, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts';
+import { systemDataAPI } from '../utils/api';
 
-/**
- * OverviewChart Component - Displays overall system statistics
- * Shows average CPU, RAM, Disk usage across all PCs with various chart types
- */
-const OverviewChart = ({ overviewData, onDataUpdate }) => {
-  const [historicalOverview, setHistoricalOverview] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [lastUpdate, setLastUpdate] = useState(null);
-  const [chartType, setChartType] = useState('line'); // 'line', 'bar', 'pie'
+export default function OverviewChart({ overviewData, onDataUpdate }) {
+  const [history,      setHistory]      = useState([]);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState(null);
+  const [lastUpdate,   setLastUpdate]   = useState(null);
+  const [chartType,    setChartType]    = useState('area');
+  const [activeMetric, setActiveMetric] = useState('all');
 
-  // Fetch historical overview data
-  const fetchHistoricalOverview = async () => {
-    setLoading(true);
-    setError(null);
-    
+  // ── Fetch ALL historical records and bucket into hourly averages ──
+  const fetchHistory = useCallback(async () => {
+    setLoading(true); setError(null);
     try {
-      // Get data for all PCs over the last 24 hours
-      const response = await systemDataAPI.getData({ hours: 24 });
-      if (response.success && response.data.latest) {
-        // Calculate hourly averages
-        const hourlyData = calculateHourlyAverages(response.data.latest);
-        setHistoricalOverview(hourlyData);
+      // Get all PCs list first
+      const res = await systemDataAPI.getData();
+      if (!res.success) throw new Error(res.message);
+
+      const allPCs = res.data?.latest ?? [];
+      if (allPCs.length === 0) { setHistory([]); return; }
+
+      // Fetch historical data for ALL PCs in parallel
+      const historicalResults = await Promise.all(
+        allPCs.map(pc =>
+          systemDataAPI.getData({ pcId: pc.pcId, hours: 24 })
+            .then(r => r.success ? (r.data?.historical ?? []) : [])
+            .catch(() => [])
+        )
+      );
+
+      // Flatten all records from all PCs
+      const allRecords = historicalResults.flat();
+
+      if (allRecords.length === 0) {
+        // No historical data — use the latest single reading from each PC
+        // to show at least something on the chart
+        const now = new Date();
+        const point = {
+          h:    now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', hour12:false }),
+          cpu:  allPCs.reduce((s,p) => s + (p.cpu ?? p.cpu_utilization ?? 0), 0) / allPCs.length,
+          ram:  allPCs.reduce((s,p) => s + (p.ram ?? p.memory_usage    ?? 0), 0) / allPCs.length,
+          disk: allPCs.reduce((s,p) => s + (p.disk ?? 0), 0) / allPCs.length,
+        };
+        setHistory([point]);
         setLastUpdate(new Date());
+        return;
       }
-    } catch (err) {
-      setError(err.message);
-      console.error('Error fetching historical overview:', err);
+
+      // Bucket records into hourly slots
+      const now = new Date();
+      const buckets = [];
+
+      for (let i = 23; i >= 0; i--) {
+        const slotStart = new Date(now - i * 3600000);
+        const slotEnd   = new Date(now - (i - 1) * 3600000);
+        const pts       = allRecords.filter(r => {
+          const t = new Date(r.createdAt);
+          return t >= slotStart && t < slotEnd;
+        });
+
+        if (pts.length > 0) {
+          const avg = arr => Math.round(
+            arr.filter(v => v != null).reduce((a, b) => a + b, 0) /
+            arr.filter(v => v != null).length * 10
+          ) / 10;
+
+          buckets.push({
+            h:    slotStart.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', hour12:false }),
+            cpu:  avg(pts.map(p => p.cpu_utilization ?? p.cpu ?? null)),
+            ram:  avg(pts.map(p => p.memory_usage    ?? p.ram ?? null)),
+            disk: avg(pts.map(p => p.disk ?? null)),
+          });
+        }
+      }
+
+      setHistory(buckets);
+      setLastUpdate(new Date());
+    } catch (e) {
+      console.error('Chart fetch error:', e);
+      setError(e.message);
     } finally {
       setLoading(false);
     }
-  };
-
-  // Calculate hourly averages from PC data
-  const calculateHourlyAverages = (pcData) => {
-    const now = new Date();
-    const hourlyAverages = [];
-    
-    // Create 24 hourly buckets
-    for (let i = 23; i >= 0; i--) {
-      const hourStart = new Date(now.getTime() - i * 60 * 60 * 1000);
-      const hourEnd = new Date(now.getTime() - (i - 1) * 60 * 60 * 1000);
-      
-      // Filter PCs that have data in this hour
-      const pcsInHour = pcData.filter(pc => {
-        const pcTime = new Date(pc.createdAt);
-        return pcTime >= hourStart && pcTime < hourEnd;
-      });
-      
-      if (pcsInHour.length > 0) {
-        const avgCpu = dataUtils.calculateAverage(pcsInHour.map(pc => pc.cpu));
-        const avgRam = dataUtils.calculateAverage(pcsInHour.map(pc => pc.ram));
-        const avgDisk = dataUtils.calculateAverage(pcsInHour.map(pc => pc.disk));
-        
-        hourlyAverages.push({
-          hour: hourStart.toLocaleTimeString('en-US', { 
-            hour: '2-digit', 
-            minute: '2-digit',
-            hour12: false 
-          }),
-          cpu: avgCpu,
-          ram: avgRam,
-          disk: avgDisk,
-          timestamp: hourStart
-        });
-      }
-    }
-    
-    return hourlyAverages;
-  };
-
-  // Fetch data on component mount
-  useEffect(() => {
-    fetchHistoricalOverview();
-    
-    // Set up interval to refresh data every 60 seconds
-    const interval = setInterval(fetchHistoricalOverview, 60000);
-    
-    return () => clearInterval(interval);
   }, []);
 
-  // Prepare pie chart data
-  const pieData = overviewData ? [
-    { name: 'CPU', value: overviewData.avgCpu, color: '#10b981' },
-    { name: 'RAM', value: overviewData.avgRam, color: '#3b82f6' },
-    { name: 'Disk', value: overviewData.avgDisk, color: '#f59e0b' }
-  ] : [];
+  useEffect(() => {
+    fetchHistory();
+    const t = setInterval(fetchHistory, 60000);
+    return () => clearInterval(t);
+  }, [fetchHistory]);
 
-  // Custom tooltip for charts
+  if (!overviewData) return (
+    <div className="card" style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div className="spin" />
+    </div>
+  );
+
+  const avg = {
+    cpu:  overviewData.avgCpu  ?? 0,
+    ram:  overviewData.avgRam  ?? 0,
+    disk: overviewData.avgDisk ?? 0,
+  };
+
+  const metrics = [
+    { key:'cpu',  label:'CPU',    color:'#3b82f6', val: avg.cpu  },
+    { key:'ram',  label:'Memory', color:'#8b5cf6', val: avg.ram  },
+    { key:'disk', label:'Disk',   color:'#f59e0b', val: avg.disk },
+  ];
+
+  // Custom tooltip
   const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-gray-800 border border-gray-600 rounded-lg p-3 shadow-lg">
-          <p className="text-gray-300 text-sm mb-1">{`Time: ${label}`}</p>
-          {payload.map((entry, index) => (
-            <p key={index} className="text-sm" style={{ color: entry.color }}>
-              {`${entry.dataKey.toUpperCase()}: ${entry.value.toFixed(1)}%`}
-            </p>
-          ))}
-        </div>
-      );
-    }
-    return null;
-  };
-
-  // Custom pie chart tooltip
-  const PieTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const data = payload[0];
-      return (
-        <div className="bg-gray-800 border border-gray-600 rounded-lg p-3 shadow-lg">
-          <p className="text-sm" style={{ color: data.payload.color }}>
-            {`${data.name}: ${data.value.toFixed(1)}%`}
-          </p>
-        </div>
-      );
-    }
-    return null;
-  };
-
-  if (!overviewData) {
+    if (!active || !payload?.length) return null;
+    const valid = payload.filter(p => p.value != null);
+    if (!valid.length) return null;
     return (
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="loading-spinner mx-auto mb-4"></div>
-            <p className="text-gray-400">Loading overview data...</p>
+      <div style={{
+        background:'#1c1c1c', border:'1px solid #333', borderRadius:10,
+        padding:'12px 16px', boxShadow:'0 8px 32px rgba(0,0,0,0.5)',
+        minWidth:130,
+      }}>
+        <div style={{ fontSize:11, color:'#666', marginBottom:8 }}>{label}</div>
+        {valid.map((p, i) => (
+          <div key={i} style={{
+            display:'flex', alignItems:'center', justifyContent:'space-between',
+            gap:16, marginBottom: i < valid.length-1 ? 5 : 0,
+          }}>
+            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+              <div style={{ width:8, height:8, borderRadius:'50%', background:p.color }} />
+              <span style={{ fontSize:12, color:'#888' }}>{p.dataKey.toUpperCase()}</span>
+            </div>
+            <span style={{ fontSize:13, fontWeight:600, color:p.color }}>
+              {p.value?.toFixed(1)}%
+            </span>
           </div>
-        </div>
+        ))}
       </div>
     );
-  }
+  };
+
+  const axisStyle = { fill:'#555', fontSize:10 };
+  const gridStyle = { stroke:'rgba(255,255,255,0.04)', strokeDasharray:'3 8' };
 
   return (
-    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+    <div className="card">
+
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div style={{
+        display:'flex', justifyContent:'space-between', alignItems:'center',
+        padding:'16px 20px', borderBottom:'1px solid var(--border)',
+      }}>
         <div>
-          <h3 className="text-xl font-semibold text-white mb-1">System Overview</h3>
-          <p className="text-gray-400 text-sm">
-            Average usage across {overviewData.totalPCs} PC{overviewData.totalPCs !== 1 ? 's' : ''}
-          </p>
+          <div style={{ fontSize:14, fontWeight:600, color:'var(--txt)', letterSpacing:'-0.01em' }}>
+            24-Hour System Trends
+          </div>
+          <div style={{ fontSize:12, color:'var(--txt3)', marginTop:2 }}>
+            Average across {overviewData.totalPCs ?? 0} system{overviewData.totalPCs !== 1 ? 's' : ''}
+            {overviewData.anomalyCount > 0 && (
+              <span style={{ color:'var(--red)', marginLeft:10 }}>
+                · {overviewData.anomalyCount} anomal{overviewData.anomalyCount === 1 ? 'y' : 'ies'}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex space-x-2">
-          <button
-            onClick={() => setChartType('line')}
-            className={`px-3 py-1 rounded text-sm ${
-              chartType === 'line' 
-                ? 'bg-blue-600 text-white' 
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            Line
-          </button>
-          <button
-            onClick={() => setChartType('bar')}
-            className={`px-3 py-1 rounded text-sm ${
-              chartType === 'bar' 
-                ? 'bg-blue-600 text-white' 
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            Bar
-          </button>
-          <button
-            onClick={() => setChartType('pie')}
-            className={`px-3 py-1 rounded text-sm ${
-              chartType === 'pie' 
-                ? 'bg-blue-600 text-white' 
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            Pie
-          </button>
+
+        {/* Chart type */}
+        <div style={{ display:'flex', gap:4, background:'var(--bg3)', padding:'4px', borderRadius:'var(--r)' }}>
+          {[['area','Area'],['line','Line'],['split','Split']].map(([t, lbl]) => (
+            <button key={t} onClick={() => setChartType(t)} style={{
+              fontSize:12, fontWeight:500, padding:'5px 12px',
+              borderRadius:6, border:'none', cursor:'pointer',
+              background: chartType === t ? 'var(--card2)' : 'transparent',
+              color:      chartType === t ? 'var(--txt)'   : 'var(--txt3)',
+              boxShadow:  chartType === t ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
+              transition:'all 0.15s',
+            }}>{lbl}</button>
+          ))}
         </div>
       </div>
 
-      {/* Current Averages */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="bg-gray-700 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-gray-300 text-sm">Avg CPU</span>
-            <span 
-              className="text-xs px-2 py-1 rounded-full"
-              style={{ 
-                backgroundColor: dataUtils.getStatusColor(overviewData.avgCpu) + '20',
-                color: dataUtils.getStatusColor(overviewData.avgCpu)
-              }}
-            >
-              {dataUtils.getStatusText(overviewData.avgCpu)}
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-white">
-            {dataUtils.formatPercentage(overviewData.avgCpu)}
-          </div>
-        </div>
-
-        <div className="bg-gray-700 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-gray-300 text-sm">Avg RAM</span>
-            <span 
-              className="text-xs px-2 py-1 rounded-full"
-              style={{ 
-                backgroundColor: dataUtils.getStatusColor(overviewData.avgRam) + '20',
-                color: dataUtils.getStatusColor(overviewData.avgRam)
-              }}
-            >
-              {dataUtils.getStatusText(overviewData.avgRam)}
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-white">
-            {dataUtils.formatPercentage(overviewData.avgRam)}
-          </div>
-        </div>
-
-        <div className="bg-gray-700 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-gray-300 text-sm">Avg Disk</span>
-            <span 
-              className="text-xs px-2 py-1 rounded-full"
-              style={{ 
-                backgroundColor: dataUtils.getStatusColor(overviewData.avgDisk) + '20',
-                color: dataUtils.getStatusColor(overviewData.avgDisk)
-              }}
-            >
-              {dataUtils.getStatusText(overviewData.avgDisk)}
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-white">
-            {dataUtils.formatPercentage(overviewData.avgDisk)}
-          </div>
-        </div>
+      {/* Metric selector tabs */}
+      <div style={{ display:'flex', borderBottom:'1px solid var(--border)' }}>
+        <MetricTab label="All" value={null} color="#666" active={activeMetric === 'all'} onClick={() => setActiveMetric('all')} />
+        {metrics.map(m => (
+          <MetricTab key={m.key} label={m.label} value={m.val} color={m.color}
+            active={activeMetric === m.key} onClick={() => setActiveMetric(m.key)} />
+        ))}
       </div>
 
-      {/* Charts */}
-      <div className="mb-6">
-        <h4 className="text-lg font-medium text-white mb-4">24-Hour Average Trends</h4>
+      {/* Chart area */}
+      <div style={{ padding:'20px 16px 10px' }}>
         {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <div className="loading-spinner mx-auto mb-2"></div>
-              <p className="text-gray-400 text-sm">Loading chart data...</p>
-            </div>
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:280, gap:10 }}>
+            <div className="spin" />
+            <span style={{ fontSize:12, color:'var(--txt3)' }}>Loading chart data…</span>
           </div>
         ) : error ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <p className="text-red-400 mb-2">Error loading chart data</p>
-              <button 
-                onClick={fetchHistoricalOverview}
-                className="text-blue-400 hover:text-blue-300 text-sm"
-              >
-                Retry
-              </button>
-            </div>
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:280, gap:10 }}>
+            <span style={{ fontSize:12, color:'var(--red)' }}>{error}</span>
+            <button onClick={fetchHistory} style={{
+              fontSize:12, fontWeight:500, color:'var(--blue)', background:'none',
+              border:'1px solid var(--border2)', padding:'5px 12px',
+              borderRadius:'var(--r)', cursor:'pointer',
+            }}>Retry</button>
           </div>
-        ) : historicalOverview.length > 0 ? (
-          <ResponsiveContainer width="100%" height={300}>
-            {chartType === 'line' && (
-              <LineChart data={historicalOverview}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis 
-                  dataKey="hour" 
-                  stroke="#9ca3af"
-                  fontSize={12}
-                  tick={{ fill: '#9ca3af' }}
-                />
-                <YAxis 
-                  stroke="#9ca3af"
-                  fontSize={12}
-                  tick={{ fill: '#9ca3af' }}
-                  domain={[0, 100]}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Line 
-                  type="monotone" 
-                  dataKey="cpu" 
-                  stroke="#10b981" 
-                  strokeWidth={2}
-                  dot={false}
-                  name="CPU"
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="ram" 
-                  stroke="#3b82f6" 
-                  strokeWidth={2}
-                  dot={false}
-                  name="RAM"
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="disk" 
-                  stroke="#f59e0b" 
-                  strokeWidth={2}
-                  dot={false}
-                  name="Disk"
-                />
-              </LineChart>
-            )}
-            {chartType === 'bar' && (
-              <BarChart data={historicalOverview}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis 
-                  dataKey="hour" 
-                  stroke="#9ca3af"
-                  fontSize={12}
-                  tick={{ fill: '#9ca3af' }}
-                />
-                <YAxis 
-                  stroke="#9ca3af"
-                  fontSize={12}
-                  tick={{ fill: '#9ca3af' }}
-                  domain={[0, 100]}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="cpu" fill="#10b981" name="CPU" />
-                <Bar dataKey="ram" fill="#3b82f6" name="RAM" />
-                <Bar dataKey="disk" fill="#f59e0b" name="Disk" />
-              </BarChart>
-            )}
-            {chartType === 'pie' && (
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={100}
-                  dataKey="value"
-                  label={({ name, value }) => `${name}: ${value.toFixed(1)}%`}
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip content={<PieTooltip />} />
-              </PieChart>
-            )}
-          </ResponsiveContainer>
+        ) : history.length > 0 ? (
+
+          /* ── Split view ── */
+          chartType === 'split' ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+              {metrics.map(m => (
+                <div key={m.key}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                      <div style={{ width:12, height:3, background:m.color, borderRadius:2 }} />
+                      <span style={{ fontSize:12, fontWeight:500, color:'var(--txt2)' }}>{m.label}</span>
+                    </div>
+                    <span style={{ fontSize:11, color:'var(--txt3)' }}>avg {m.val?.toFixed(1)}%</span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={80}>
+                    <AreaChart data={history} margin={{ top:2, right:4, bottom:0, left:-30 }}>
+                      <defs>
+                        <linearGradient id={`sg-${m.key}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%"   stopColor={m.color} stopOpacity="0.3"/>
+                          <stop offset="100%" stopColor={m.color} stopOpacity="0"/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid {...gridStyle} vertical={false} />
+                      <XAxis dataKey="h" tick={axisStyle} axisLine={false} tickLine={false} hide />
+                      <YAxis domain={[0, 100]} tick={axisStyle} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Area type="monotone" dataKey={m.key}
+                        stroke={m.color} strokeWidth={2}
+                        fill={`url(#sg-${m.key})`}
+                        connectNulls dot={false} activeDot={{ r:4, fill:m.color }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                  <div style={{ height:1, background:'var(--border)' }} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            /* ── Area or Line ── */
+            <ResponsiveContainer width="100%" height={280}>
+              {chartType === 'area' ? (
+                <AreaChart data={history} margin={{ top:4, right:4, bottom:0, left:-10 }}>
+                  <defs>
+                    <linearGradient id="g-cpu"  x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%"   stopColor="#3b82f6" stopOpacity="0.25"/>
+                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0"/>
+                    </linearGradient>
+                    <linearGradient id="g-ram"  x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%"   stopColor="#8b5cf6" stopOpacity="0.25"/>
+                      <stop offset="100%" stopColor="#8b5cf6" stopOpacity="0"/>
+                    </linearGradient>
+                    <linearGradient id="g-disk" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%"   stopColor="#f59e0b" stopOpacity="0.15"/>
+                      <stop offset="100%" stopColor="#f59e0b" stopOpacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid {...gridStyle} vertical={false} />
+                  <XAxis dataKey="h" tick={axisStyle} axisLine={false} tickLine={false}
+                    interval={Math.max(0, Math.floor(history.length / 6) - 1)} />
+                  <YAxis domain={[0, 100]} tick={axisStyle} axisLine={false} tickLine={false}
+                    tickFormatter={v => `${v}%`} width={36} />
+                  <Tooltip content={<CustomTooltip />} />
+                  {(activeMetric === 'all' || activeMetric === 'disk') && (
+                    <Area type="monotone" dataKey="disk" name="DISK"
+                      stroke="#f59e0b" strokeWidth={1.5} fill="url(#g-disk)"
+                      connectNulls dot={false} activeDot={{ r:4, fill:'#f59e0b' }} />
+                  )}
+                  {(activeMetric === 'all' || activeMetric === 'cpu') && (
+                    <Area type="monotone" dataKey="cpu" name="CPU"
+                      stroke="#3b82f6" strokeWidth={2} fill="url(#g-cpu)"
+                      connectNulls dot={false} activeDot={{ r:4, fill:'#3b82f6' }} />
+                  )}
+                  {(activeMetric === 'all' || activeMetric === 'ram') && (
+                    <Area type="monotone" dataKey="ram" name="RAM"
+                      stroke="#8b5cf6" strokeWidth={2} fill="url(#g-ram)"
+                      connectNulls dot={false} activeDot={{ r:4, fill:'#8b5cf6' }} />
+                  )}
+                </AreaChart>
+              ) : (
+                <LineChart data={history} margin={{ top:4, right:4, bottom:0, left:-10 }}>
+                  <CartesianGrid {...gridStyle} vertical={false} />
+                  <XAxis dataKey="h" tick={axisStyle} axisLine={false} tickLine={false}
+                    interval={Math.max(0, Math.floor(history.length / 6) - 1)} />
+                  <YAxis domain={[0, 100]} tick={axisStyle} axisLine={false} tickLine={false}
+                    tickFormatter={v => `${v}%`} width={36} />
+                  <Tooltip content={<CustomTooltip />} />
+                  {(activeMetric === 'all' || activeMetric === 'disk') && (
+                    <Line type="monotone" dataKey="disk" name="DISK"
+                      stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="5 4"
+                      connectNulls dot={false} activeDot={{ r:4 }} />
+                  )}
+                  {(activeMetric === 'all' || activeMetric === 'cpu') && (
+                    <Line type="monotone" dataKey="cpu" name="CPU"
+                      stroke="#3b82f6" strokeWidth={2}
+                      connectNulls dot={false} activeDot={{ r:4 }} />
+                  )}
+                  {(activeMetric === 'all' || activeMetric === 'ram') && (
+                    <Line type="monotone" dataKey="ram" name="RAM"
+                      stroke="#8b5cf6" strokeWidth={2}
+                      connectNulls dot={false} activeDot={{ r:4 }} />
+                  )}
+                </LineChart>
+              )}
+            </ResponsiveContainer>
+          )
         ) : (
-          <div className="flex items-center justify-center h-64">
-            <p className="text-gray-400">No historical data available</p>
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:280, gap:8 }}>
+            <span style={{ fontSize:22 }}>📊</span>
+            <span style={{ fontSize:13, color:'var(--txt3)' }}>No historical data yet</span>
+            <span style={{ fontSize:11, color:'var(--txt4)' }}>Appears after the first client reading</span>
           </div>
         )}
       </div>
 
-      {/* Last Update */}
-      <div className="flex items-center justify-between text-sm text-gray-400">
-        <span>
-          Last updated: {lastUpdate ? dataUtils.formatTimestamp(lastUpdate) : 'Never'}
-        </span>
-        <button 
-          onClick={fetchHistoricalOverview}
-          disabled={loading}
-          className="text-blue-400 hover:text-blue-300 disabled:text-gray-500"
-        >
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
+      {/* Legend + footer */}
+      <div style={{
+        display:'flex', justifyContent:'space-between', alignItems:'center',
+        padding:'10px 20px', borderTop:'1px solid var(--border)', background:'var(--bg2)',
+      }}>
+        <div style={{ display:'flex', gap:16 }}>
+          {metrics.map(m => (
+            <button key={m.key} onClick={() => setActiveMetric(activeMetric === m.key ? 'all' : m.key)}
+              style={{ display:'flex', alignItems:'center', gap:5, background:'none', border:'none', cursor:'pointer', padding:0 }}>
+              <div style={{ width:16, height:3, borderRadius:2, background:m.color, opacity: activeMetric === 'all' || activeMetric === m.key ? 1 : 0.3 }} />
+              <span style={{ fontSize:11, color: activeMetric === 'all' || activeMetric === m.key ? 'var(--txt3)' : 'var(--txt4)' }}>
+                {m.label}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ fontSize:11, color:'var(--txt4)' }}>
+            {lastUpdate ? `Updated ${lastUpdate.toLocaleTimeString()}` : '—'}
+          </span>
+          <button onClick={fetchHistory} disabled={loading} style={{
+            fontSize:12, fontWeight:500, color: loading ? 'var(--txt3)' : 'var(--blue)',
+            background:'none', border:'none', cursor:'pointer',
+          }}>
+            {loading ? 'Refreshing…' : '↻ Refresh'}
+          </button>
+        </div>
       </div>
     </div>
   );
-};
+}
 
-export default OverviewChart;
+/* ── Metric tab ── */
+function MetricTab({ label, value, color, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      flex:1, minWidth:80, padding:'12px 16px',
+      background: active ? 'rgba(255,255,255,0.03)' : 'transparent',
+      border:'none', borderBottom: `2px solid ${active ? color : 'transparent'}`,
+      borderRight:'1px solid var(--border)',
+      cursor:'pointer', transition:'all 0.15s', textAlign:'left',
+    }}>
+      <div style={{ fontSize:11, fontWeight:500, color: active ? 'var(--txt2)' : 'var(--txt3)', marginBottom: value != null ? 4 : 0 }}>
+        {label}
+      </div>
+      {value != null && (
+        <div style={{ fontSize:18, fontWeight:600, letterSpacing:'-0.02em', lineHeight:1, color: active ? color : 'var(--txt4)' }}>
+          {value.toFixed(1)}<span style={{ fontSize:11, fontWeight:400, color:'var(--txt4)', marginLeft:1 }}>%</span>
+        </div>
+      )}
+    </button>
+  );
+}
