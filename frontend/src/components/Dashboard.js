@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import PCCard from './PCCard';
 import OverviewChart from './OverviewChart';
-import MLInsightsPanel from './Mlinsightspanel'
+import MLInsightsPanel from './Mlinsightspanel';
 import { systemDataAPI, errorUtils } from '../utils/api';
 
-// PC is offline if no data received in last 5 minutes
+// PC is offline if no data received in last 3 minutes
 const OFFLINE_MINUTES = 3;
 
 const isOnline = (pc) => {
-  // Try createdAt first (from aggregate), then updatedAt
   const ts = pc?.createdAt || pc?.updatedAt;
   if (!ts) return false;
   const diffMs = Date.now() - new Date(ts).getTime();
@@ -16,11 +16,19 @@ const isOnline = (pc) => {
 };
 
 const NAV = [
-  { id:'overview', label:'Overview',    icon:<IconGrid />    },
-  { id:'pcs',      label:'PC Status',   icon:<IconMonitor /> },
-  { id:'ml',       label:'ML Insights', icon:<IconBrain />   },
-  { id:'alerts',   label:'Alerts',      icon:<IconAlert />   },
+  { id: 'overview', label: 'Overview',    icon: <IconGrid />    },
+  { id: 'pcs',      label: 'PC Status',   icon: <IconMonitor /> },
+  { id: 'ml',       label: 'ML Insights', icon: <IconBrain />   },
+  { id: 'alerts',   label: 'Alerts',      icon: <IconAlert />   },
 ];
+
+// ── Bottleneck colours (matches your existing palette) ──────────────────────
+const BOTTLENECK_COLORS = {
+  CPU_Bound:    '#3b82f6',
+  Memory_Bound: '#8b5cf6',
+  Disk_Bound:   '#f59e0b',
+  Normal:       '#22c55e',
+};
 
 export default function Dashboard() {
   const [data,        setData]        = useState(null);
@@ -66,28 +74,28 @@ export default function Dashboard() {
 
   if (loading && !data) {
     return (
-      <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:14 }}>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 14 }}>
         <div className="spin" />
-        <span style={{ fontSize:13, color:'var(--txt3)' }}>Loading PC Monitor…</span>
+        <span style={{ fontSize: 13, color: 'var(--txt3)' }}>Loading PC Monitor…</span>
       </div>
     );
   }
 
   return (
-    <div style={{ display:'flex', minHeight:'100vh' }}>
+    <div style={{ display: 'flex', minHeight: '100vh' }}>
 
       {/* ── SIDEBAR ── */}
       <aside style={{
-        width:220, flexShrink:0, position:'fixed', top:0, left:0, height:'100vh', zIndex:50,
-        display:'flex', flexDirection:'column',
-        background:'var(--bg2)', borderRight:'1px solid var(--border)',
+        width: 220, flexShrink: 0, position: 'fixed', top: 0, left: 0, height: '100vh', zIndex: 50,
+        display: 'flex', flexDirection: 'column',
+        background: 'var(--bg2)', borderRight: '1px solid var(--border)',
       }}>
         {/* Logo */}
-        <div style={{ padding:'18px 16px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ padding: '18px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{
-            width:32, height:32, borderRadius:8, flexShrink:0,
-            background:'linear-gradient(135deg,#3b82f6,#8b5cf6)',
-            display:'flex', alignItems:'center', justifyContent:'center',
+            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+            background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               <rect x="1" y="5" width="6" height="7" rx="1.5" fill="white" opacity="0.9"/>
@@ -96,29 +104,29 @@ export default function Dashboard() {
             </svg>
           </div>
           <div>
-            <div style={{ fontSize:14, fontWeight:600, color:'var(--txt)', letterSpacing:'-0.01em' }}>IntelliMonitor</div>
-            <div style={{ fontSize:11, color:'var(--txt3)' }}>ML Edition</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--txt)', letterSpacing: '-0.01em' }}>IntelliMonitor</div>
+            <div style={{ fontSize: 11, color: 'var(--txt3)' }}>ML Edition</div>
           </div>
         </div>
 
         {/* Quick stats */}
-        <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--border)', display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <MiniStat label="Online"  value={onlineCount}       color="green" />
           <MiniStat label="Offline" value={offlinePCs.length} color={offlinePCs.length > 0 ? 'red' : 'green'} />
         </div>
 
         {/* Nav */}
-        <nav style={{ flex:1, padding:'10px 8px', display:'flex', flexDirection:'column', gap:2 }}>
+        <nav style={{ flex: 1, padding: '10px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {NAV.map(item => (
             <button key={item.id} className={`nav-item ${nav === item.id ? 'on' : ''}`}
               onClick={() => setNav(item.id)}>
-              <span style={{ opacity:0.7, display:'flex', alignItems:'center' }}>{item.icon}</span>
+              <span style={{ opacity: 0.7, display: 'flex', alignItems: 'center' }}>{item.icon}</span>
               {item.label}
               {item.id === 'alerts' && anomalyCount > 0 && (
                 <span style={{
-                  marginLeft:'auto', background:'var(--red)', color:'white',
-                  fontSize:10, fontWeight:600, padding:'1px 6px', borderRadius:99,
-                  animation:'pulse 1.5s infinite',
+                  marginLeft: 'auto', background: 'var(--red)', color: 'white',
+                  fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 99,
+                  animation: 'pulse 1.5s infinite',
                 }}>{anomalyCount}</span>
               )}
             </button>
@@ -126,25 +134,25 @@ export default function Dashboard() {
         </nav>
 
         {/* Footer */}
-        <div style={{ padding:'14px 16px', borderTop:'1px solid var(--border)' }}>
-          <div style={{ fontSize:22, fontWeight:300, color:'var(--txt)', letterSpacing:'0.02em', lineHeight:1, marginBottom:2 }}>
-            {now.toLocaleTimeString('en-US', { hour12:false, hour:'2-digit', minute:'2-digit' })}
+        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 22, fontWeight: 300, color: 'var(--txt)', letterSpacing: '0.02em', lineHeight: 1, marginBottom: 2 }}>
+            {now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })}
           </div>
-          <div style={{ fontSize:12, color:'var(--txt3)', marginBottom:14 }}>
-            {now.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })}
+          <div style={{ fontSize: 12, color: 'var(--txt3)', marginBottom: 14 }}>
+            {now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
           </div>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-            <span style={{ fontSize:12, color:'var(--txt3)' }}>Auto-refresh</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 12, color: 'var(--txt3)' }}>Auto-refresh</span>
             <Toggle on={autoRefresh} onChange={setAutoRefresh} />
           </div>
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span className={`dot ${error ? 'd-red' : 'd-green'}`} />
-            <span style={{ fontSize:12, color: error ? 'var(--red)' : 'var(--green)' }}>
+            <span style={{ fontSize: 12, color: error ? 'var(--red)' : 'var(--green)' }}>
               {error ? 'Disconnected' : 'Connected'}
             </span>
           </div>
           {lastUpdate && (
-            <div style={{ fontSize:11, color:'var(--txt4)', marginTop:3 }}>
+            <div style={{ fontSize: 11, color: 'var(--txt4)', marginTop: 3 }}>
               Updated {lastUpdate.toLocaleTimeString()}
             </div>
           )}
@@ -152,27 +160,27 @@ export default function Dashboard() {
       </aside>
 
       {/* ── MAIN ── */}
-      <main style={{ marginLeft:220, flex:1, display:'flex', flexDirection:'column' }}>
+      <main style={{ marginLeft: 220, flex: 1, display: 'flex', flexDirection: 'column' }}>
 
         {/* Topbar */}
         <header style={{
-          height:54, display:'flex', alignItems:'center', justifyContent:'space-between',
-          padding:'0 28px', background:'var(--bg2)', borderBottom:'1px solid var(--border)',
-          position:'sticky', top:0, zIndex:40,
+          height: 54, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0 28px', background: 'var(--bg2)', borderBottom: '1px solid var(--border)',
+          position: 'sticky', top: 0, zIndex: 40,
         }}>
-          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
-            <h1 style={{ fontSize:16, fontWeight:600, color:'var(--txt)', letterSpacing:'-0.01em' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <h1 style={{ fontSize: 16, fontWeight: 600, color: 'var(--txt)', letterSpacing: '-0.01em' }}>
               {NAV.find(n => n.id === nav)?.label}
             </h1>
-            <div style={{ width:1, height:16, background:'var(--border2)' }} />
-            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <div style={{ width: 1, height: 16, background: 'var(--border2)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span className={`dot ${onlineCount > 0 ? 'd-green' : 'd-dim'}`} />
-              <span style={{ fontSize:12, color:'var(--txt3)' }}>{onlineCount} online</span>
+              <span style={{ fontSize: 12, color: 'var(--txt3)' }}>{onlineCount} online</span>
             </div>
             {offlinePCs.length > 0 && (
-              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span className="dot d-dim" />
-                <span style={{ fontSize:12, color:'var(--txt4)' }}>{offlinePCs.length} offline</span>
+                <span style={{ fontSize: 12, color: 'var(--txt4)' }}>{offlinePCs.length} offline</span>
               </div>
             )}
             {anomalyCount > 0 && (
@@ -180,18 +188,18 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-            {error && <span style={{ fontSize:12, color:'var(--red)' }}>{error}</span>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {error && <span style={{ fontSize: 12, color: 'var(--red)' }}>{error}</span>}
             <button onClick={() => { setLoading(true); fetchData(); }} disabled={loading}
               style={{
-                fontSize:13, fontWeight:500,
+                fontSize: 13, fontWeight: 500,
                 color: loading ? 'var(--txt3)' : 'var(--txt)',
-                background:'var(--bg3)', border:'1px solid var(--border2)',
-                padding:'6px 14px', borderRadius:'var(--r)', cursor: loading ? 'default' : 'pointer',
-                transition:'all 0.15s', display:'flex', alignItems:'center', gap:6,
+                background: 'var(--bg3)', border: '1px solid var(--border2)',
+                padding: '6px 14px', borderRadius: 'var(--r)', cursor: loading ? 'default' : 'pointer',
+                transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 6,
               }}
-              onMouseEnter={e => { if(!loading) e.currentTarget.style.borderColor='var(--txt3)'; }}
-              onMouseLeave={e => e.currentTarget.style.borderColor='var(--border2)'}
+              onMouseEnter={e => { if (!loading) e.currentTarget.style.borderColor = 'var(--txt3)'; }}
+              onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border2)'}
             >
               <RefreshIcon spin={loading} />
               {loading ? 'Refreshing…' : 'Refresh'}
@@ -200,26 +208,31 @@ export default function Dashboard() {
         </header>
 
         {/* Content */}
-        <div style={{ padding:'28px', flex:1 }} className="fade-up">
+        <div style={{ padding: '28px', flex: 1 }} className="fade-up">
 
           {/* OVERVIEW */}
           {nav === 'overview' && (
-            <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               <StatGrid ov={ov} onlineCount={onlineCount} offlineCount={offlinePCs.length} anomalyCount={anomalyCount} />
-              <OverviewChart overviewData={ov} onDataUpdate={fetchData} />
+
+              {/* Area chart + Pie chart side by side */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
+                <OverviewChart overviewData={ov} onDataUpdate={fetchData} />
+                <BottleneckPieChart pcs={onlinePCs} />
+              </div>
             </div>
           )}
 
           {/* PC STATUS */}
           {nav === 'pcs' && (
             pcs.length > 0 ? (
-              <div style={{ display:'flex', flexDirection:'column', gap:24 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
                 {onlinePCs.length > 0 && (
                   <div>
                     <SectionLabel dot="d-green" text={`ONLINE — ${onlinePCs.length} system${onlinePCs.length !== 1 ? 's' : ''}`} />
-                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(380px,1fr))', gap:16 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(380px,1fr))', gap: 16 }}>
                       {onlinePCs.map((pc, i) => (
-                        <div key={pc.pcId} className="fade-up" style={{ animationDelay:`${i*0.05}s` }}>
+                        <div key={pc.pcId} className="fade-up" style={{ animationDelay: `${i * 0.05}s` }}>
                           <PCCard pcId={pc.pcId} latestData={pc} onDataUpdate={fetchData} />
                         </div>
                       ))}
@@ -229,9 +242,9 @@ export default function Dashboard() {
                 {offlinePCs.length > 0 && (
                   <div>
                     <SectionLabel dot="d-dim" text={`OFFLINE — ${offlinePCs.length} system${offlinePCs.length !== 1 ? 's' : ''} · last data shown`} dim />
-                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(380px,1fr))', gap:16 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(380px,1fr))', gap: 16 }}>
                       {offlinePCs.map((pc, i) => (
-                        <div key={pc.pcId} className="fade-up" style={{ animationDelay:`${i*0.05}s` }}>
+                        <div key={pc.pcId} className="fade-up" style={{ animationDelay: `${i * 0.05}s` }}>
                           <PCCard pcId={pc.pcId} latestData={pc} onDataUpdate={fetchData} />
                         </div>
                       ))}
@@ -250,12 +263,117 @@ export default function Dashboard() {
   );
 }
 
+/* ── Bottleneck Pie Chart ───────────────────────────── */
+function BottleneckPieChart({ pcs }) {
+  const counts = {};
+  pcs.forEach(pc => {
+    const label = pc.mlResults?.bottleneck?.label || 'Normal';
+    counts[label] = (counts[label] || 0) + 1;
+  });
+
+  const pieData = Object.entries(counts).map(([name, value]) => ({ name, value }));
+
+  if (!pcs.length) return (
+    <div className="card" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--txt)', letterSpacing: '-0.01em' }}>
+        Bottleneck Distribution
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--txt3)', marginTop: 3, marginBottom: 16 }}>
+        No online systems
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200 }}>
+        <span style={{ fontSize: 13, color: 'var(--txt4)' }}>—</span>
+      </div>
+    </div>
+  );
+
+  const CustomTooltip = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const { name, value } = payload[0].payload;
+    const total = pcs.length || 1;
+    return (
+      <div style={{
+        background: '#1c1c1c', border: '1px solid #333',
+        borderRadius: 8, padding: '8px 12px', fontSize: 11,
+      }}>
+        <div style={{ color: BOTTLENECK_COLORS[name] || '#fff', fontWeight: 600, marginBottom: 3 }}>
+          {name.replace(/_/g, ' ')}
+        </div>
+        <div style={{ color: '#aaa' }}>
+          {value} PC{value !== 1 ? 's' : ''} · {((value / total) * 100).toFixed(0)}%
+        </div>
+      </div>
+    );
+  };
+
+  const CustomLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
+    if (percent < 0.08) return null;
+    const RADIAN = Math.PI / 180;
+    const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+    const x = cx + r * Math.cos(-midAngle * RADIAN);
+    const y = cy + r * Math.sin(-midAngle * RADIAN);
+    return (
+      <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central"
+        style={{ fontSize: 11, fontWeight: 600 }}>
+        {`${(percent * 100).toFixed(0)}%`}
+      </text>
+    );
+  };
+
+  return (
+    <div className="card" style={{ padding: '20px 24px' }}>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--txt)', letterSpacing: '-0.01em' }}>
+          Bottleneck Distribution
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--txt3)', marginTop: 3 }}>
+          Across {pcs.length} online system{pcs.length !== 1 ? 's' : ''}
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={200}>
+        <PieChart>
+          <Pie
+            data={pieData}
+            cx="50%"
+            cy="50%"
+            innerRadius={52}
+            outerRadius={85}
+            paddingAngle={3}
+            dataKey="value"
+            labelLine={false}
+            label={<CustomLabel />}
+          >
+            {pieData.map((entry) => (
+              <Cell key={entry.name} fill={BOTTLENECK_COLORS[entry.name] || '#555'} />
+            ))}
+          </Pie>
+          <Tooltip content={<CustomTooltip />} />
+        </PieChart>
+      </ResponsiveContainer>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', justifyContent: 'center', marginTop: 8 }}>
+        {pieData.map(({ name, value }) => (
+          <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 3, background: BOTTLENECK_COLORS[name] || '#555', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: 'var(--txt3)' }}>
+              {name.replace(/_/g, ' ')}{' '}
+              <span style={{ color: 'var(--txt2)', fontWeight: 500 }}>({value})</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ── Section label ─────────────────────────────────── */
 function SectionLabel({ dot, text, dim }) {
   return (
-    <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
       <span className={`dot ${dot}`} />
-      <span style={{ fontSize:12, fontWeight:500, color: dim ? 'var(--txt4)' : 'var(--txt3)', letterSpacing:'0.03em' }}>
+      <span style={{ fontSize: 12, fontWeight: 500, color: dim ? 'var(--txt4)' : 'var(--txt3)', letterSpacing: '0.03em' }}>
         {text}
       </span>
     </div>
@@ -264,11 +382,11 @@ function SectionLabel({ dot, text, dim }) {
 
 /* ── Mini sidebar stat ─────────────────────────────── */
 function MiniStat({ label, value, color }) {
-  const cols = { green:'var(--green)', red:'var(--red)', dim:'var(--txt3)' };
+  const cols = { green: 'var(--green)', red: 'var(--red)', dim: 'var(--txt3)' };
   return (
-    <div style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:8, padding:'7px 10px' }}>
-      <div style={{ fontSize:10, color:'var(--txt4)', marginBottom:2, fontWeight:500 }}>{label}</div>
-      <div style={{ fontSize:20, fontWeight:600, color: cols[color] || 'var(--txt)', lineHeight:1 }}>{value}</div>
+    <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 10px' }}>
+      <div style={{ fontSize: 10, color: 'var(--txt4)', marginBottom: 2, fontWeight: 500 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 600, color: cols[color] || 'var(--txt)', lineHeight: 1 }}>{value}</div>
     </div>
   );
 }
@@ -276,27 +394,27 @@ function MiniStat({ label, value, color }) {
 /* ── Stat grid ─────────────────────────────────────── */
 function StatGrid({ ov, onlineCount, offlineCount, anomalyCount }) {
   const stats = [
-    { label:'Online',         value: onlineCount,                                  unit:'',   sub: offlineCount > 0 ? `${offlineCount} offline` : 'All active',  color:'#22c55e' },
-    { label:'Avg CPU',        value: ov.avgCpu?.toFixed(1)            ?? '—',       unit:'%',  sub:'Utilization',     color:'#3b82f6' },
-    { label:'Avg Memory',     value: ov.avgRam?.toFixed(1)            ?? '—',       unit:'%',  sub:'Usage',           color:'#8b5cf6' },
-    { label:'Anomalies',      value: anomalyCount,                                  unit:'',   sub: anomalyCount > 0 ? 'Action needed' : 'All clear', color: anomalyCount > 0 ? '#ef4444' : '#22c55e' },
-    { label:'Avg Temp',       value: ov.avgTemperature?.toFixed(1)    ?? '—',       unit:'°C', sub:'CPU temperature', color:'#f59e0b' },
-    { label:'Avg Latency',    value: ov.avgNetworkLatency?.toFixed(0) ?? '—',       unit:'ms', sub:'Network',         color:'#22c55e' },
-    { label:'Avg Power',      value: ov.avgPower?.toFixed(0)          ?? '—',       unit:'W',  sub:'Consumption',     color:'#a855f7' },
+    { label: 'Online',      value: onlineCount,                                  unit: '',   sub: offlineCount > 0 ? `${offlineCount} offline` : 'All active',  color: '#22c55e' },
+    { label: 'Avg CPU',     value: ov.avgCpu?.toFixed(1)            ?? '—',       unit: '%',  sub: 'Utilization',     color: '#3b82f6' },
+    { label: 'Avg Memory',  value: ov.avgRam?.toFixed(1)            ?? '—',       unit: '%',  sub: 'Usage',           color: '#8b5cf6' },
+    { label: 'Anomalies',   value: anomalyCount,                                  unit: '',   sub: anomalyCount > 0 ? 'Action needed' : 'All clear', color: anomalyCount > 0 ? '#ef4444' : '#22c55e' },
+    { label: 'Avg Temp',    value: ov.avgTemperature?.toFixed(1)    ?? '—',       unit: '°C', sub: 'CPU temperature', color: '#f59e0b' },
+    { label: 'Avg Latency', value: ov.avgNetworkLatency?.toFixed(0) ?? '—',       unit: 'ms', sub: 'Network',         color: '#22c55e' },
+    { label: 'Avg Power',   value: ov.avgPower?.toFixed(0)          ?? '—',       unit: 'W',  sub: 'Consumption',     color: '#a855f7' },
   ];
 
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:12 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 12 }}>
       {stats.map((s, i) => (
-        <div key={i} className="card fade-up" style={{ padding:'16px 18px', animationDelay:`${i*0.04}s` }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12 }}>
-            <span style={{ fontSize:12, fontWeight:500, color:'var(--txt3)' }}>{s.label}</span>
-            <div style={{ width:8, height:8, borderRadius:99, background:s.color, opacity:0.8 }} />
+        <div key={i} className="card fade-up" style={{ padding: '16px 18px', animationDelay: `${i * 0.04}s` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--txt3)' }}>{s.label}</span>
+            <div style={{ width: 8, height: 8, borderRadius: 99, background: s.color, opacity: 0.8 }} />
           </div>
-          <div style={{ fontSize:28, fontWeight:600, color:s.color, letterSpacing:'-0.02em', lineHeight:1, marginBottom:6 }}>
-            {s.value}<span style={{ fontSize:14, fontWeight:400, color:'var(--txt3)', marginLeft:2 }}>{s.unit}</span>
+          <div style={{ fontSize: 28, fontWeight: 600, color: s.color, letterSpacing: '-0.02em', lineHeight: 1, marginBottom: 6 }}>
+            {s.value}<span style={{ fontSize: 14, fontWeight: 400, color: 'var(--txt3)', marginLeft: 2 }}>{s.unit}</span>
           </div>
-          <div style={{ fontSize:11, color:'var(--txt4)' }}>{s.sub}</div>
+          <div style={{ fontSize: 11, color: 'var(--txt4)' }}>{s.sub}</div>
         </div>
       ))}
     </div>
@@ -307,51 +425,51 @@ function StatGrid({ ov, onlineCount, offlineCount, anomalyCount }) {
 function AlertsView({ pcs }) {
   const alerts = pcs.filter(p => p.mlResults?.isAnomaly || p.mlResults?.severity?.level === 'High');
   if (!alerts.length) return (
-    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:320, gap:12 }}>
-      <div style={{ width:52, height:52, borderRadius:'50%', background:'rgba(34,197,94,0.1)', border:'1px solid rgba(34,197,94,0.2)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 320, gap: 12 }}>
+      <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="20 6 9 17 4 12"/>
         </svg>
       </div>
-      <div style={{ fontSize:15, fontWeight:600, color:'var(--txt)' }}>All systems normal</div>
-      <div style={{ fontSize:13, color:'var(--txt3)' }}>No anomalies across {pcs.length} online system{pcs.length !== 1 ? 's' : ''}</div>
+      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--txt)' }}>All systems normal</div>
+      <div style={{ fontSize: 13, color: 'var(--txt3)' }}>No anomalies across {pcs.length} online system{pcs.length !== 1 ? 's' : ''}</div>
     </div>
   );
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-      <div style={{ fontSize:13, color:'var(--txt3)' }}>{alerts.length} active alert{alerts.length !== 1 ? 's' : ''}</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontSize: 13, color: 'var(--txt3)' }}>{alerts.length} active alert{alerts.length !== 1 ? 's' : ''}</div>
       {alerts.map(pc => {
         const ml  = pc.mlResults || {};
         const sev = ml.severity?.level;
         return (
-          <div key={pc.pcId} className="card" style={{ padding:20, borderColor: sev === 'High' ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.3)' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div key={pc.pcId} className="card" style={{ padding: 20, borderColor: sev === 'High' ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.3)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span className={`dot ${sev === 'High' ? 'd-red' : 'd-amber'}`} />
-                <span style={{ fontSize:15, fontWeight:600, color:'var(--txt)' }}>{pc.pcId}</span>
+                <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--txt)' }}>{pc.pcId}</span>
               </div>
               <span className={`badge ${sev === 'High' ? 'b-red' : 'b-amber'}`}>{sev ?? 'Anomaly'}</span>
             </div>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 14 }}>
               {[
-                { l:'CPU',  v:`${pc.cpu_utilization?.toFixed(1) ?? '—'}%`,  c:'var(--blue)'   },
-                { l:'RAM',  v:`${pc.memory_usage?.toFixed(1)    ?? '—'}%`,  c:'var(--purple)' },
-                { l:'Temp', v:`${pc.temperature?.toFixed(1)     ?? '—'}°C`, c:'var(--amber)'  },
+                { l: 'CPU',  v: `${pc.cpu_utilization?.toFixed(1) ?? '—'}%`,  c: 'var(--blue)'   },
+                { l: 'RAM',  v: `${pc.memory_usage?.toFixed(1)    ?? '—'}%`,  c: 'var(--purple)' },
+                { l: 'Temp', v: `${pc.temperature?.toFixed(1)     ?? '—'}°C`, c: 'var(--amber)'  },
               ].map(m => (
-                <div key={m.l} style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--r)', padding:'10px 12px' }}>
-                  <div style={{ fontSize:11, color:'var(--txt3)', marginBottom:4 }}>{m.l}</div>
-                  <div style={{ fontSize:18, fontWeight:600, color:m.c }}>{m.v}</div>
+                <div key={m.l} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px' }}>
+                  <div style={{ fontSize: 11, color: 'var(--txt3)', marginBottom: 4 }}>{m.l}</div>
+                  <div style={{ fontSize: 18, fontWeight: 600, color: m.c }}>{m.v}</div>
                 </div>
               ))}
             </div>
             {ml.bottleneck?.label && (
-              <div style={{ fontSize:12, color:'var(--amber)', marginBottom:5 }}>
-                Bottleneck: {ml.bottleneck.label.replace(/_/g,' ')} ({ml.bottleneck.confidence?.toFixed(1)}%)
+              <div style={{ fontSize: 12, color: 'var(--amber)', marginBottom: 5 }}>
+                Bottleneck: {ml.bottleneck.label.replace(/_/g, ' ')} ({ml.bottleneck.confidence?.toFixed(1)}%)
               </div>
             )}
             {ml.severity?.action && (
-              <div style={{ fontSize:13, fontWeight:600, color:'var(--red)' }}>→ {ml.severity.action}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--red)' }}>→ {ml.severity.action}</div>
             )}
           </div>
         );
@@ -364,15 +482,15 @@ function AlertsView({ pcs }) {
 function Toggle({ on, onChange }) {
   return (
     <button onClick={() => onChange(!on)} style={{
-      width:36, height:20, borderRadius:99, border:'none', cursor:'pointer',
+      width: 36, height: 20, borderRadius: 99, border: 'none', cursor: 'pointer',
       background: on ? 'var(--blue)' : 'var(--bg3)',
       border: `1px solid ${on ? 'var(--blue)' : 'var(--border2)'}`,
-      position:'relative', transition:'all 0.2s',
+      position: 'relative', transition: 'all 0.2s',
     }}>
       <span style={{
-        position:'absolute', top:3, left: on ? 18 : 3,
-        width:12, height:12, borderRadius:'50%', background:'white',
-        transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,0.3)',
+        position: 'absolute', top: 3, left: on ? 18 : 3,
+        width: 12, height: 12, borderRadius: '50%', background: 'white',
+        transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
       }} />
     </button>
   );
@@ -390,8 +508,8 @@ function RefreshIcon({ spin }) {
 
 function Empty({ msg }) {
   return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:300 }}>
-      <span style={{ fontSize:13, color:'var(--txt3)' }}>{msg}</span>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300 }}>
+      <span style={{ fontSize: 13, color: 'var(--txt3)' }}>{msg}</span>
     </div>
   );
 }
