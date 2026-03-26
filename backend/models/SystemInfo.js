@@ -134,6 +134,23 @@ SystemInfoSchema.statics.getOverviewStats = function () {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   return this.aggregate([
     { $match: { createdAt: { $gte: since } } },
+
+    // Step 1: Get the LATEST record per PC only
+    { $sort: { createdAt: -1 } },
+    {
+      $group: {
+        _id:               '$pcId',
+        cpu_utilization:   { $first: '$cpu_utilization' },
+        memory_usage:      { $first: '$memory_usage' },
+        disk:              { $first: '$disk' },
+        network_latency:   { $first: '$network_latency' },
+        temperature:       { $first: '$temperature' },
+        power_consumption: { $first: '$power_consumption' },
+        isAnomaly:         { $first: '$mlResults.isAnomaly' },
+      },
+    },
+
+    // Step 2: Now aggregate across those latest-per-PC records
     {
       $group: {
         _id:               null,
@@ -143,10 +160,12 @@ SystemInfoSchema.statics.getOverviewStats = function () {
         avgNetworkLatency: { $avg: '$network_latency' },
         avgTemperature:    { $avg: '$temperature' },
         avgPower:          { $avg: '$power_consumption' },
-        totalPCs:          { $addToSet: '$pcId' },
-        anomalyCount:      { $sum: { $cond: [{ $eq: ['$mlResults.isAnomaly', true] }, 1, 0] } },
+        totalPCs:          { $sum: 1 },
+        // Count only PCs whose LATEST reading is anomalous
+        anomalyCount:      { $sum: { $cond: [{ $eq: ['$isAnomaly', true] }, 1, 0] } },
       },
     },
+
     {
       $project: {
         avgCpu:            { $round: ['$avgCpu',            1] },
@@ -155,7 +174,7 @@ SystemInfoSchema.statics.getOverviewStats = function () {
         avgNetworkLatency: { $round: ['$avgNetworkLatency', 1] },
         avgTemperature:    { $round: ['$avgTemperature',    1] },
         avgPower:          { $round: ['$avgPower',          1] },
-        totalPCs:          { $size: '$totalPCs' },
+        totalPCs:          1,
         anomalyCount:      1,
       },
     },
